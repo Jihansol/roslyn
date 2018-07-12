@@ -1,6 +1,7 @@
 [CmdletBinding(PositionalBinding=$false)]
 param ( [string]$bootstrapDir = "",
-        [switch]$debugDeterminism = $false)
+        [switch]$debugDeterminism = $false,
+        [string]$altRootDrive = "q:")
 
 Set-StrictMode -version 2.0
 $ErrorActionPreference = "Stop"
@@ -12,9 +13,9 @@ $ErrorActionPreference = "Stop"
 $script:skipList = @()
 
 # Location that deterministic error information should be written to. 
-[string]$script:errorDir = ""
-[string]$script:errorDirLeft = ""
-[string]$script:errorDirRight = ""
+[string]$errorDir = ""
+[string]$errorDirLeft = ""
+[string]$errorDirRight = ""
 
 function Run-Build([string]$rootDir, [switch]$restore = $false, [string]$logFile = $null) {
     Push-Location $rootDir
@@ -29,7 +30,7 @@ function Run-Build([string]$rootDir, [switch]$restore = $false, [string]$logFile
             Restore-Project $dotnet "Roslyn.sln"
         }
 
-        $args = "/nologo /v:m /nodeReuse:false /m /p:DebugDeterminism=true /p:BootstrapBuildPath=$script:bootstrapDir /p:Features=`"debug-determinism`" /p:UseRoslynAnalyzers=false /p:DeployExtension=false Roslyn.sln"
+        $args = "/nologo /v:m /nodeReuse:false /m /p:DebugDeterminism=true /p:DeveloperBuild=false /p:BootstrapBuildPath=$script:bootstrapDir /p:Features=`"debug-determinism`" /p:UseRoslynAnalyzers=false /p:DeployExtension=false Roslyn.sln"
         if ($logFile -ne $null) {
             $logFile = Join-Path $logDir $logFile
             $args += " /bl:$logFile"
@@ -52,22 +53,36 @@ function Get-ObjDir([string]$rootDir) {
 function Get-FilesToProcess([string]$rootDir) {
     $objDir = Get-ObjDir $rootDir
     foreach ($item in Get-ChildItem -re -in *.dll,*.exe,*.pdb,*.sourcelink.json $objDir) {
-        $fileFullName = $item.FullName 
-        $fileName = Split-Path -leaf $fileFullName
+        $filePath = $item.FullName 
+        $fileName = Split-Path -leaf $filePath
 
         if ($skipList.Contains($fileName)) {
             continue;
         }
 
-        $fileId = $fileFullName.Substring($objDir.Length).Replace("\", ".")
-        $fileHash = (Get-FileHash $fileFullName -algorithm MD5).Hash
+        $fileId = $filePath.Substring($objDir.Length).Replace("\", ".")
+        $fileHash = (Get-FileHash $filePath -algorithm MD5).Hash
 
         $data = @{}
         $data.Hash = $fileHash
-        $data.Content = [IO.File]::ReadAllBytes($fileFullName)
+        $data.Content = [IO.File]::ReadAllBytes($filePath)
         $data.FileId = $fileId
         $data.FileName = $fileName
-        $data.FileFullName = $fileFullName
+        $data.FilePath = $filePath
+
+        $keyFilePath = $filePath + ".key"
+        $keyFileName = Split-Path -leaf $keyFilePath
+        if (Test-Path $keyFilePath) { 
+            $data.KeyFileName = $keyFileName
+            $data.KeyFilePath = $keyFilePath
+            $data.KeyFileContent = [IO.File]::ReadAllBytes($keyFilePath)
+        }
+        else {
+            $data.KeyFileName = ""
+            $data.KeyFilePath = ""
+            $data.KeyFileContent = $null
+        }
+
         Write-Output $data
     }
 }
@@ -127,10 +142,10 @@ function Test-Build([string]$rootDir, $dataMap, [string]$logFile, [switch]$resto
     foreach ($fileData in Get-FilesToProcess $rootDir) {
         $fileId = $fileData.FileId
         $fileName = $fileData.FileName
-        $fileFullName = $fileData.FileFullName
+        $filePath = $fileData.FilePath
 
         if (-not $dataMap.Contains($fileId)) {
-            Write-Host "ERROR! Missing entry in map $fileId->$fileFullName"
+            Write-Host "ERROR! Missing entry in map $fileId->$filePath"
             $allGood = $false
             continue
         }
@@ -143,7 +158,15 @@ function Test-Build([string]$rootDir, $dataMap, [string]$logFile, [switch]$resto
 
             # Save out the original and baseline so Jenkins will archive them for investigation
             [IO.File]::WriteAllBytes((Join-Path $errorDirLeft $fileName), $oldFileData.Content)
-            Copy-Item $fileFullName (Join-Path $errorDirRight $fileName)
+            Copy-Item $filePath (Join-Path $errorDirRight $fileName)
+
+            # Copy the key files if available too
+            $keyFileName = $oldFileData.KeyFileName
+            if ($keyFileName -ne "") {
+                [IO.File]::WriteAllBytes((Join-Path $errorDirLeft $keyFileName), $oldFileData.KeyFileContent)
+                Copy-Item $fileData.KeyFilePath (Join-Path $errorDirRight $keyFileName)
+            }
+
             continue
         }
 
@@ -182,14 +205,15 @@ function Run-Test() {
     # Run another build in a different source location and verify that path mapping 
     # allows the build to be identical.  To do this we'll copy the entire source 
     # tree under the Binaries\q directory and run a build from there.
-    $altRootDir = Join-Path "$repoDir\Binaries" "q"
-    Remove-Item -re -fo $altRootDir -ErrorAction SilentlyContinue
-    & robocopy $repoDir $altRootDir /E /XD $binariesDir /XD ".git" /njh /njs /ndl /nc /ns /np /nfl
-
-    # Symlink the .git directory to make SourceLink think Binaries/q is the repo root:
-    Exec-Command "cmd" "/c mklink /d $(Join-Path $altRootDir `".git`") $(Join-Path $repoDir `".git`")"
-
-    Test-Build -rootDir $altRootDir -dataMap $dataMap -logFile "test2.binlog" -restore
+    Write-Host "Building in a different directory"
+    Exec-Command "subst" "$altRootDrive $(Split-Path -parent $repoDir)"
+    try {
+        $altRootDir = Join-Path "$($altRootDrive)\" (Split-Path -leaf $repoDir)
+        Test-Build -rootDir $altRootDir -dataMap $dataMap -logFile "test2.binlog" -restore
+    }
+    finally {
+        Exec-Command "subst" "$altRootDrive /d"
+    }
 }
 
 try {
