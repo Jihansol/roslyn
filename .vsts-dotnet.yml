@@ -4,11 +4,19 @@ phases:
     parallel: 2
     matrix:
       debug:
-        configuration: debug
+        configuration: Debug
       release: 
-        configuration: release
+        configuration: Release
   steps:
     - script: build/scripts/cibuild.cmd -$(configuration) -testDesktop -test32
+
+    - task: PublishTestResults@1
+      inputs:
+        testRunner: XUnit
+        testResultsFiles: '**/xUnitResults/*.xml'
+        mergeTestResults: true
+        testRunTitle: 'Unit Tests'
+      condition: succeededOrFailed()
 
     - task: PublishBuildArtifacts@1
       inputs:
