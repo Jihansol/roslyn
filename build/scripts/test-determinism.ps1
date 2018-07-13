@@ -17,20 +17,17 @@ $script:skipList = @()
 [string]$errorDirLeft = ""
 [string]$errorDirRight = ""
 
-function Run-Build([string]$rootDir, [switch]$restore = $false, [string]$logFile = $null) {
+function Run-Build([string]$rootDir, [string]$logFile = $null) {
     Push-Location $rootDir
     try {
 
         # Clean out the previous run
         Write-Host "Cleaning the Binaries"
-        Exec-Console $msbuild "/nologo /v:m /nodeReuse:false /t:clean Roslyn.sln" 
-        Get-FilesToProcess $rootDir | %{ Remove-Item $_.FilePath }
         Remove-Item -Recurse (Get-ConfigDir $rootDir) 
+        Remove-Item -Recurse (Get-ObjDir $rootDir) 
 
-        if ($restore) {
-            Write-Host "Restoring the packages"
-            Restore-Project $dotnet "Roslyn.sln"
-        }
+        Write-Host "Restoring the packages"
+        Restore-Project $dotnet "Roslyn.sln"
 
         $args = "/nologo /v:m /nodeReuse:false /m /p:DebugDeterminism=true /p:DeveloperBuild=false /p:BootstrapBuildPath=$script:bootstrapDir /p:Features=`"debug-determinism`" /p:UseRoslynAnalyzers=false /p:DeployExtension=false Roslyn.sln"
         if ($logFile -ne $null) {
@@ -138,8 +135,8 @@ function Test-MapContents($dataMap) {
     }
 }
 
-function Test-Build([string]$rootDir, $dataMap, [string]$logFile, [switch]$restore = $false) {
-    Run-Build $rootDir -logFile $logFile -restore:$restore
+function Test-Build([string]$rootDir, $dataMap, [string]$logFile) {
+    Run-Build $rootDir -logFile $logFile
 
     $errorList = @()
     $allGood = $true
@@ -213,7 +210,7 @@ function Run-Test() {
     Exec-Command "subst" "$altRootDrive $(Split-Path -parent $repoDir)"
     try {
         $altRootDir = Join-Path "$($altRootDrive)\" (Split-Path -leaf $repoDir)
-        Test-Build -rootDir $altRootDir -dataMap $dataMap -logFile "test2.binlog" -restore
+        Test-Build -rootDir $altRootDir -dataMap $dataMap -logFile "test2.binlog"
     }
     finally {
         Exec-Command "subst" "$altRootDrive /d"
