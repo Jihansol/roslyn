@@ -1,6 +1,6 @@
 [CmdletBinding(PositionalBinding=$false)]
 param ( [string]$bootstrapDir = "",
-        [switch]$debugDeterminism = $false,
+        [switch]$release = $false,
         [string]$altRootDrive = "q:")
 
 Set-StrictMode -version 2.0
@@ -24,6 +24,8 @@ function Run-Build([string]$rootDir, [switch]$restore = $false, [string]$logFile
         # Clean out the previous run
         Write-Host "Cleaning the Binaries"
         Exec-Console $msbuild "/nologo /v:m /nodeReuse:false /t:clean Roslyn.sln" 
+        Get-FilesToProcess $rootDir | %{ Remove-Item $_.FilePath }
+        Remove-Item -Recurse (Get-ConfigDir $rootDir) 
 
         if ($restore) {
             Write-Host "Restoring the packages"
@@ -46,6 +48,10 @@ function Run-Build([string]$rootDir, [switch]$restore = $false, [string]$logFile
 
 function Get-ObjDir([string]$rootDir) { 
     return Join-Path $rootDir "Binaries\Obj"
+}
+
+function Get-ConfigDir([string]$rootDir) { 
+    return Join-Path $rootDir "Binaries\$buildConfiguration"
 }
 
 # Return all of the files that need to be processed for determinism under the given
@@ -180,8 +186,6 @@ function Test-Build([string]$rootDir, $dataMap, [string]$logFile, [switch]$resto
         }
 
         Write-Host "Archiving failure information"
-        $logDir = Join-Path $repoDir "Binaries\Debug\Logs"
-        Create-Directory $logDir
         $zipFile = Join-Path $logDir "determinism.zip"
         Add-Type -Assembly "System.IO.Compression.FileSystem";
         [System.IO.Compression.ZipFile]::CreateFromDirectory($script:errorDir, $zipFile, "Fastest", $true);
@@ -220,8 +224,8 @@ try {
     . (Join-Path $PSScriptRoot "build-utils.ps1")
 
     # Create all of the logging directories
-    $configDir = Join-Path $binariesDir "Debug"
-    $logDir = Join-Path $configDir "Logs"
+    $buildConfiguration = if ($release) { "Release" } else { "Debug" }
+    $logDir = Join-Path (Get-ConfigDir $repoDir) "Logs"
     $errorDir = Join-Path $binariesDir "Determinism"
     $errorDirLeft = Join-Path $errorDir "Left"
     $errorDirRight = Join-Path $errorDir "Right"

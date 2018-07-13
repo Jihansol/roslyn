@@ -2,6 +2,7 @@ phases:
 - phase: Windows_Unit_Tests
   queue:
     parallel: 2
+    timeoutInMinutes: 90
     matrix:
       debug:
         configuration: Debug
