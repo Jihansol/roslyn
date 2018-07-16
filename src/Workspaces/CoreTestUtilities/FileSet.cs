@@ -73,7 +73,7 @@ namespace Microsoft.CodeAnalysis.UnitTests
                 }
             }
 
-            return this;
+            throw new InvalidOperationException($"Could not replace {elementName} with {elementValue} in {fileName}");
         }
     }
 }
